@@ -53,6 +53,7 @@ export default {
 
 
     const targetUrl = new URL(env.LAMBDA_URL);
+    targetUrl.pathname = new URL(request.url).pathname;
 
 
     const signed = await signRequest(
