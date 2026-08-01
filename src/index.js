@@ -20,6 +20,28 @@ function corsHeaders(request, env) {
   };
 }
 
+// This worker only ever serves JSON/SSE to the frontend (never HTML), so the
+// CSP can be maximally locked down and there's no clickjacking surface — the
+// headers below are still set defensively in case a client ever renders the
+// response body directly.
+const SECURITY_HEADERS = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+  "Content-Security-Policy": "default-src 'none'",
+  "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+  "Permissions-Policy": "geolocation=(), camera=(), microphone=()",
+  "X-Permitted-Cross-Domain-Policies": "none",
+};
+
+/** Applies the static security headers to a Headers instance, mutating it in place. */
+function applySecurityHeaders(headers) {
+  for (const [key, value] of Object.entries(SECURITY_HEADERS)) {
+    headers.set(key, value);
+  }
+  return headers;
+}
+
 async function signRequest(env, url, body) {
 
   const signer = new SignatureV4({
@@ -66,20 +88,21 @@ export default {
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: cors ? 204 : 403,
-        headers: cors ?? undefined,
+        headers: applySecurityHeaders(new Headers(cors ?? undefined)),
       });
     }
 
     if (request.method !== "POST") {
       return new Response("Method not allowed", {
         status: 405,
-        headers: cors ?? undefined,
+        headers: applySecurityHeaders(new Headers(cors ?? undefined)),
       });
     }
 
     if (!cors) {
       return new Response("Origin not allowed", {
         status: 403,
+        headers: applySecurityHeaders(new Headers()),
       });
     }
 
@@ -119,6 +142,7 @@ export default {
     for (const [key, value] of Object.entries(cors)) {
       headers.set(key, value);
     }
+    applySecurityHeaders(headers);
 
 
     return new Response(
