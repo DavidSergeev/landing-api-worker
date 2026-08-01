@@ -3,7 +3,7 @@ main = "src/index.js"
 compatibility_date = "2026-08-01"
 
 [vars]
-ALLOWED_ORIGINS = "https://davidsergeev.github.io,http://localhost:5173"
+ALLOWED_ORIGINS = "https://david-slutsky.com,https://davidsergeev.github.io,http://localhost:5173"
 
 [[routes]]
 pattern = "api.david-slutsky.com"
