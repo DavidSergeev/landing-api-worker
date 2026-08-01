@@ -2,15 +2,9 @@ name = "landing-api"
 main = "src/index.js"
 compatibility_date = "2026-08-01"
 
-# Non-secret configuration. Override per-environment below if needed.
 [vars]
-# AWS_IAM-protected Lambda Function URL this worker proxies to (see
-# landing-page-backend/template.yaml — FunctionUrlConfig.AuthType must be
-# AWS_IAM for the SigV4 signing in src/index.js to be required/accepted).
-# Comma-separated list of origins allowed to call this worker (CORS).
 ALLOWED_ORIGINS = "https://davidsergeev.github.io,http://localhost:5173"
 
-# Secrets (set via `wrangler secret put <NAME>`, not stored here):
-#   AWS_ACCESS_KEY_ID
-#   AWS_SECRET_ACCESS_KEY
-#   AWS_REGION
+[[routes]]
+pattern = "api.david-slutsky.com"
+custom_domain = true
