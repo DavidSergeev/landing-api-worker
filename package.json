@@ -1,0 +1,20 @@
+{
+  "name": "landing-api-worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker reverse proxy that signs requests with AWS SigV4 before forwarding them to the landing page's IAM-protected Lambda Function URL.",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "@aws-crypto/sha256-js": "^5.2.0",
+    "@aws-sdk/signature-v4": "^3.370.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.118.0"
+  }
+}
