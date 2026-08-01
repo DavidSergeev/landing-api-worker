@@ -101,17 +101,15 @@ export default {
       body: signed.body,
     });
 
-    const responseHeaders = new Headers(upstreamResponse.headers);
-    for (const [key, value] of cors.entries()) {
-      responseHeaders.set(key, value);
-    }
+    console.log("Lambda status:", upstreamResponse.status);
 
-    // Streamed byte-for-byte: `upstreamResponse.body` is passed straight
-    // through so SSE chunks from the RESPONSE_STREAM Lambda reach the
-    // browser as they arrive instead of being buffered here.
-    return new Response(upstreamResponse.body, {
+    const text = await upstreamResponse.text();
+
+    console.log("Lambda body:", text);
+
+    return new Response(text, {
       status: upstreamResponse.status,
-      headers: responseHeaders,
+      headers: cors,
     });
   },
 };
