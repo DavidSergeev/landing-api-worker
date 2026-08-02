@@ -8,3 +8,9 @@ ALLOWED_ORIGINS = "https://david-slutsky.com,https://davidsergeev.github.io,http
 [[routes]]
 pattern = "api.david-slutsky.com"
 custom_domain = true
+
+# Stores 24h "already scheduled a meeting" cooldown markers, keyed by a hash of
+# (IP, User-Agent). See buildScheduleMeetingBlockKey() in src/index.js.
+[[kv_namespaces]]
+binding = "SCHEDULE_MEETING_BLOCKS"
+id = "2dd48638f0f14f4cbb5d1759f62862da"

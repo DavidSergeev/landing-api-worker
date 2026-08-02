@@ -31,6 +31,19 @@ landing-api-worker/
 - CORS is enforced in the worker (checked against `ALLOWED_ORIGINS`), since
   once the Lambda sits behind IAM auth its own `CORSMiddleware` no longer sees
   the real browser `Origin`.
+- `POST /schedule-meeting` additionally enforces a 24h per-caller cooldown
+  using Workers KV (free tier): the caller's IP + User-Agent are hashed
+  (SHA-256, via the runtime's native Web Crypto — never stored in plaintext)
+  into a KV key. If that key exists, the request is rejected with `429` and a
+  `Retry-After` header *before* it ever reaches the Lambda. Otherwise the
+  request is proxied as usual, its (small, non-streamed) JSON body is read to
+  check `status`, and the key is written with `expirationTtl: 86400` unless
+  the outcome was the hard failure `"the meeting is not scheduled"` (see
+  `MeetingScheduledStatus` in `landing-page-backend/src/agent_tools/tools.py`)
+  — i.e. it still blocks on the partial-success case ("saved but email
+  failed"). KV's TTL handles expiry automatically, no cleanup job needed.
+  This is separate from — and in addition to — the dashboard Rate Limiting
+  Rule already limiting burst frequency (4/5 requests per 10s per caller).
 
 ## Setup
 
@@ -44,6 +57,14 @@ Non-secret config lives in `wrangler.toml`:
 
 - `LAMBDA_URL` — the Lambda Function URL to proxy to.
 - `ALLOWED_ORIGINS` — comma-separated list of origins allowed to call this worker.
+- `SCHEDULE_MEETING_BLOCKS` — KV namespace backing the 24h `/schedule-meeting`
+  cooldown, created via:
+
+  ```bash
+  npx wrangler kv namespace create SCHEDULE_MEETING_BLOCKS
+  ```
+
+  (the resulting `id` is already wired into `wrangler.toml`).
 
 Secrets (already created per the task, set via the Cloudflare dashboard or
 `wrangler secret put`, never committed):
