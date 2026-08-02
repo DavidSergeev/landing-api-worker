@@ -24,7 +24,11 @@ landing-api-worker/
   matching the endpoints in `landing-page-backend/src/main.py`.
 - Every proxied request is signed with `@aws-sdk/signature-v4` +
   `@aws-crypto/sha256-js` (pure-JS SHA-256, no Node crypto needed — works on
-  Workers' V8 isolate runtime) before being forwarded to `LAMBDA_URL`.
+  Workers' V8 isolate runtime) before being forwarded to `LAMBDA_URL`. The
+  signed headers also include `x-real-ip` (from `CF-Connecting-IP`) — since
+  it's part of the SigV4 signature, only this Worker can set it truthfully,
+  so the Lambda can trust it as the real caller IP for its own per-user rate
+  limiting (it otherwise has no visibility into the original client at all).
 - The chat endpoint's streamed SSE response (`AWS_LWA_INVOKE_MODE=response_stream`)
   is passed straight through — `upstreamResponse.body` is forwarded byte-for-byte,
   it is never buffered here.

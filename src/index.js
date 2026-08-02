@@ -60,11 +60,9 @@ async function hashIdentity(parts) {
 
 // IP alone can over-block shared networks (NAT/VPN/CGNAT); pairing it with the
 // User-Agent narrows that without storing either value in plaintext in KV.
-async function buildScheduleMeetingBlockKey(request) {
-  const ip = request.headers.get("CF-Connecting-IP");
+async function buildScheduleMeetingBlockKey(ip, userAgent) {
   if (!ip) return null;
-  const userAgent = request.headers.get("User-Agent") || "";
-  return `sm-block:${await hashIdentity([ip, userAgent])}`;
+  return `sm-block:${await hashIdentity([ip, userAgent || ""])}`;
 }
 
 function tooManyRequestsResponse(cors) {
@@ -81,7 +79,7 @@ function tooManyRequestsResponse(cors) {
   );
 }
 
-async function signRequest(env, url, body) {
+async function signRequest(env, url, body, ip) {
 
   const signer = new SignatureV4({
     service: "lambda",
@@ -110,6 +108,12 @@ async function signRequest(env, url, body) {
     headers: {
       host: url.hostname,
       "content-type": "application/json",
+      // Included in the SigV4 signature, so it can't be forged by anyone
+      // without the Worker's AWS credentials — the Lambda can trust it as the
+      // real caller IP. Lets the backend enforce its own per-user rate limits
+      // (e.g. the agent's schedule_meeting tool call), which it otherwise has
+      // no visibility into since it only ever sees this Worker as the caller.
+      "x-real-ip": ip || "",
     },
 
     body,
@@ -147,12 +151,17 @@ export default {
 
     const pathname = new URL(request.url).pathname;
     const isScheduleMeeting = pathname === SCHEDULE_MEETING_PATH;
+    const ip = request.headers.get("CF-Connecting-IP");
 
     // Checked up front so a blocked caller never reaches the Lambda (saves
     // invocations and never runs the meeting-scheduling side effects again).
+    // This is a fast pre-filter only — the backend enforces the authoritative
+    // per-user check (covering this endpoint AND the agent's schedule_meeting
+    // tool call from "/"), since only it knows whether scheduling truly
+    // succeeded and can key on attendee_email in addition to IP.
     let blockKey = null;
     if (isScheduleMeeting) {
-      blockKey = await buildScheduleMeetingBlockKey(request);
+      blockKey = await buildScheduleMeetingBlockKey(ip, request.headers.get("User-Agent"));
       if (blockKey && (await env.SCHEDULE_MEETING_BLOCKS.get(blockKey)) !== null) {
         console.log(`schedule-meeting: blocked ${blockKey}`);
         return tooManyRequestsResponse(cors);
@@ -169,7 +178,8 @@ export default {
     const signed = await signRequest(
       env,
       targetUrl,
-      body
+      body,
+      ip
     );
 
 
