@@ -17,6 +17,14 @@ const SCHEDULE_MEETING_FAILURE_STATUS = "the meeting is not scheduled";
 const WAKE_UP_PATH = "/wake-up";
 const WAKE_UP_BLOCK_TTL_SECONDS = 2 * 60 * 60;
 
+// Fixed-window per-caller cap on the chat endpoint itself: the first chat
+// call opens a 1h window, up to CHAT_RATE_LIMIT_MAX_CALLS calls are allowed
+// inside it, and the window's expiry is never extended by later calls (unlike
+// a sliding window) — once it lapses, the caller gets a fresh set of calls.
+const CHAT_PATH = "/";
+const CHAT_RATE_LIMIT_WINDOW_SECONDS = 60 * 60;
+const CHAT_RATE_LIMIT_MAX_CALLS = 20;
+
 function parseAllowedOrigins(env) {
   return (env.ALLOWED_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
 }
@@ -81,6 +89,13 @@ async function buildWakeUpBlockKey(ip, userAgent) {
   return `wu-block:${await hashIdentity([ip, userAgent || ""])}`;
 }
 
+// Same (IP, User-Agent) identity again, yet another namespace/prefix — this
+// one backs the 1h/20-call chat cap.
+async function buildChatRateLimitKey(ip, userAgent) {
+  if (!ip) return null;
+  return `chat-rl:${await hashIdentity([ip, userAgent || ""])}`;
+}
+
 function tooManyRequestsResponse(cors) {
   return new Response(
     JSON.stringify({ error: "You've already scheduled a meeting recently. Please try again in 24 hours." }),
@@ -109,6 +124,67 @@ function redirectedResponse(cors) {
       })),
     }
   );
+}
+
+function chatRateLimitedResponse(cors, retryAfterSeconds) {
+  return new Response(
+    JSON.stringify({ error: "You've reached the hourly chat limit. Please try again later." }),
+    {
+      status: 429,
+      headers: applySecurityHeaders(new Headers({
+        ...cors,
+        "Content-Type": "application/json",
+        "Retry-After": String(retryAfterSeconds),
+      })),
+    }
+  );
+}
+
+/**
+ * Reads the caller's current chat-window entry (`{ count, expiresAt }`) from
+ * KV, starting a fresh CHAT_RATE_LIMIT_WINDOW_SECONDS-long window if none
+ * exists yet or the stored one has lapsed. Returns `{ allowed: false,
+ * retryAfterSeconds }` once `count` would exceed CHAT_RATE_LIMIT_MAX_CALLS,
+ * otherwise increments and persists the count (via KV's absolute `expiration`,
+ * so the window's original expiry is preserved rather than pushed out on every
+ * call) and returns `{ allowed: true }`.
+ *
+ * This counts calls, not successful ones — the chat response is streamed SSE
+ * and piped through untouched (see the Lambda proxy below), so unlike
+ * schedule-meeting/wake-up there's no small buffered body to inspect after
+ * the fact without breaking streaming.
+ */
+async function checkAndIncrementChatRateLimit(env, key) {
+  const now = Math.floor(Date.now() / 1000);
+
+  let entry = null;
+  try {
+    const raw = await env.CHAT_RATE_LIMITS.get(key);
+    if (raw) entry = JSON.parse(raw);
+  } catch (err) {
+    console.error(`chat-rate-limit: failed to read/parse entry for ${key}: ${err.message}`);
+  }
+
+  if (!entry || typeof entry.expiresAt !== "number" || entry.expiresAt <= now) {
+    entry = { count: 0, expiresAt: now + CHAT_RATE_LIMIT_WINDOW_SECONDS };
+  }
+
+  if (entry.count >= CHAT_RATE_LIMIT_MAX_CALLS) {
+    return { allowed: false, retryAfterSeconds: entry.expiresAt - now };
+  }
+
+  entry.count += 1;
+  try {
+    // KV requires expirations at least 60s out; that can only fail here if
+    // the window has (by now) under a minute left, in which case it's about
+    // to close on its own anyway — fail open and let this call through
+    // uncounted rather than block the user over a KV-side constraint.
+    await env.CHAT_RATE_LIMITS.put(key, JSON.stringify(entry), { expiration: entry.expiresAt });
+  } catch (err) {
+    console.error(`chat-rate-limit: failed to persist entry for ${key}: ${err.message}`);
+  }
+
+  return { allowed: true };
 }
 
 async function signRequest(env, url, body, ip) {
@@ -184,6 +260,7 @@ export default {
     const pathname = new URL(request.url).pathname;
     const isScheduleMeeting = pathname === SCHEDULE_MEETING_PATH;
     const isWakeUp = pathname === WAKE_UP_PATH;
+    const isChat = pathname === CHAT_PATH;
     const ip = request.headers.get("CF-Connecting-IP");
 
     // Checked up front so a blocked caller never reaches the Lambda (saves
@@ -210,6 +287,20 @@ export default {
       if (wakeUpBlockKey && (await env.WAKE_UP_BLOCKS.get(wakeUpBlockKey)) !== null) {
         console.log(`wake-up: redirected ${wakeUpBlockKey}`);
         return redirectedResponse(cors);
+      }
+    }
+
+    // 1h/20-call cap on the chat endpoint itself. The window opens on this
+    // caller's first chat call (tracked in KV) and every call inside it
+    // counts, whether or not the Lambda ends up answering successfully.
+    if (isChat) {
+      const chatKey = await buildChatRateLimitKey(ip, request.headers.get("User-Agent"));
+      if (chatKey) {
+        const { allowed, retryAfterSeconds } = await checkAndIncrementChatRateLimit(env, chatKey);
+        if (!allowed) {
+          console.log(`chat: rate-limited ${chatKey}`);
+          return chatRateLimitedResponse(cors, retryAfterSeconds);
+        }
       }
     }
 

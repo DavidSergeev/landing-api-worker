@@ -56,6 +56,19 @@ landing-api-worker/
   `{"message": "warm up started"}`); every other call in that window is
   answered directly by the worker with `{"message": "redirected"}` and never
   reaches the Lambda.
+- `POST /` (chat) is additionally capped at 20 calls per caller per 1h,
+  using its own `CHAT_RATE_LIMITS` KV namespace, keyed the same way (hashed
+  IP + User-Agent). Unlike the other two limits, the value stored is a small
+  JSON object — `{"count": <n>, "expiresAt": <unix seconds>}` — because this
+  is a genuine counter, not a one-shot flag: a caller's first chat call opens
+  a 1h window (`expiresAt = now + 3600`), every call inside that window
+  increments `count` via a KV `put` that reuses the *same* `expiresAt` as an
+  absolute `expiration` (so the window's end never gets pushed out by later
+  calls, unlike a sliding window), and once `count` would exceed 20 the
+  caller is rejected with `429` + `Retry-After` until `expiresAt`. This
+  counts calls, not successful ones — the response is streamed SSE and piped
+  through untouched, so there's no small buffered body to inspect afterwards
+  the way `/schedule-meeting` inspects `status`.
 
 ## Setup
 
@@ -85,6 +98,15 @@ Non-secret config lives in `wrangler.toml`:
   ```
 
   then replace the placeholder `id` under `WAKE_UP_BLOCKS` in `wrangler.toml`
+  with the one it prints.
+
+- `CHAT_RATE_LIMITS` — KV namespace backing the 1h/20-call chat cap, created via:
+
+  ```bash
+  npx wrangler kv namespace create CHAT_RATE_LIMITS
+  ```
+
+  then replace the placeholder `id` under `CHAT_RATE_LIMITS` in `wrangler.toml`
   with the one it prints.
 
 Secrets (already created per the task, set via the Cloudflare dashboard or

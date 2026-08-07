@@ -22,3 +22,12 @@ id = "2dd48638f0f14f4cbb5d1759f62862da"
 [[kv_namespaces]]
 binding = "WAKE_UP_BLOCKS"
 id = "ef478340bacc4c8d9d5db35d3cb5908a"
+
+# Stores the 1h/20-call chat rate-limit windows ({count, expiresAt} JSON),
+# keyed by a hash of (IP, User-Agent). See buildChatRateLimitKey() and
+# checkAndIncrementChatRateLimit() in src/index.js. Create with:
+#   npx wrangler kv namespace create CHAT_RATE_LIMITS
+# then replace the placeholder id below with the one it prints.
+[[kv_namespaces]]
+binding = "CHAT_RATE_LIMITS"
+id = "da72f3470ccc4954896cc692829e8b49"
