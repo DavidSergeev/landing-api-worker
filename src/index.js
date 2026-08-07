@@ -231,7 +231,7 @@ async function signRequest(env, url, body, ip) {
 
 export default {
 
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
 
     const cors = corsHeaders(request, env);
 
@@ -318,6 +318,35 @@ export default {
       ip
     );
 
+    // TEMPORARY diagnostics for the InvalidSignatureException investigation —
+    // safe to log: Authorization only contains the access key ID + derived
+    // signature, never the secret key. Remove once resolved.
+    console.log("DEBUG signing", JSON.stringify({
+      targetUrl: targetUrl.toString(),
+      region: env.AWS_REGION,
+      accessKeyIdPreview: `${(env.AWS_ACCESS_KEY_ID || "").slice(0, 4)}...${(env.AWS_ACCESS_KEY_ID || "").slice(-4)} (len=${(env.AWS_ACCESS_KEY_ID || "").length})`,
+      secretKeyLen: (env.AWS_SECRET_ACCESS_KEY || "").length,
+      bodyLen: body.length,
+      signedHeaders: signed.headers,
+    }));
+
+    // TEMPORARY: construct the actual Request object the runtime will send,
+    // pointed at the REAL target (unlike the flawed httpbin test), and read
+    // back its normalized headers to see if "host" (or anything else) gets
+    // silently dropped/altered before it ever reaches the network.
+    const probeReq = new Request(targetUrl, {
+      method: "POST",
+      headers: signed.headers,
+      body: signed.body,
+    });
+    console.log("DEBUG probe", JSON.stringify({
+      probeHost: probeReq.headers.get("host"),
+      probeContentType: probeReq.headers.get("content-type"),
+      probeXRealIp: probeReq.headers.get("x-real-ip"),
+      probeAuthPresent: probeReq.headers.has("authorization"),
+      probeAllHeaderKeys: [...probeReq.headers.keys()],
+      signedHostValue: signed.headers.host,
+    }));
 
     const response = await fetch(
       targetUrl,
@@ -327,9 +356,20 @@ export default {
         headers: signed.headers,
 
         body: signed.body,
+
+        // fetch() follows redirects by default, but any follow-up request it
+        // makes automatically is NOT re-signed — that unsigned second request
+        // is what actually 403s with InvalidSignatureException, which looks
+        // identical to a genuine bad-credentials failure unless you know to
+        // look for it. "manual" surfaces the 3xx here instead so it's visible
+        // (and so we never silently send an unsigned request to Lambda).
+        redirect: "manual",
       }
     );
 
+    if (response.status >= 300 && response.status < 400) {
+      console.error(`lambda proxy: unexpected redirect (${response.status}) to ${response.headers.get("location")}`);
+    }
 
     const headers = new Headers(response.headers);
 
