@@ -9,6 +9,14 @@ const SCHEDULE_MEETING_BLOCK_TTL_SECONDS = 24 * 60 * 60;
 // does NOT start the 24h cooldown, since no meeting record was actually created.
 const SCHEDULE_MEETING_FAILURE_STATUS = "the meeting is not scheduled";
 
+// Hit by the frontend when the user opens the chat, so the Lambda cold-starts
+// ahead of the first real chat message. Only the first caller in any 2h
+// window actually reaches the Lambda; every other call in that window is
+// answered here as a no-op "redirected" so the Lambda isn't woken up (and
+// billed) once per click.
+const WAKE_UP_PATH = "/wake-up";
+const WAKE_UP_BLOCK_TTL_SECONDS = 2 * 60 * 60;
+
 function parseAllowedOrigins(env) {
   return (env.ALLOWED_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
 }
@@ -65,6 +73,14 @@ async function buildScheduleMeetingBlockKey(ip, userAgent) {
   return `sm-block:${await hashIdentity([ip, userAgent || ""])}`;
 }
 
+// Same (IP, User-Agent) identity as schedule-meeting, but a separate KV
+// namespace/prefix and a much shorter (2h) TTL — this is a warm-up throttle,
+// not an abuse guard.
+async function buildWakeUpBlockKey(ip, userAgent) {
+  if (!ip) return null;
+  return `wu-block:${await hashIdentity([ip, userAgent || ""])}`;
+}
+
 function tooManyRequestsResponse(cors) {
   return new Response(
     JSON.stringify({ error: "You've already scheduled a meeting recently. Please try again in 24 hours." }),
@@ -74,6 +90,22 @@ function tooManyRequestsResponse(cors) {
         ...cors,
         "Content-Type": "application/json",
         "Retry-After": String(SCHEDULE_MEETING_BLOCK_TTL_SECONDS),
+      })),
+    }
+  );
+}
+
+// Answered directly by the worker, without ever reaching the Lambda — this is
+// the expected, common-case response once a caller has already warmed up the
+// Lambda within the last 2h.
+function redirectedResponse(cors) {
+  return new Response(
+    JSON.stringify({ message: "redirected" }),
+    {
+      status: 200,
+      headers: applySecurityHeaders(new Headers({
+        ...cors,
+        "Content-Type": "application/json",
       })),
     }
   );
@@ -151,6 +183,7 @@ export default {
 
     const pathname = new URL(request.url).pathname;
     const isScheduleMeeting = pathname === SCHEDULE_MEETING_PATH;
+    const isWakeUp = pathname === WAKE_UP_PATH;
     const ip = request.headers.get("CF-Connecting-IP");
 
     // Checked up front so a blocked caller never reaches the Lambda (saves
@@ -165,6 +198,18 @@ export default {
       if (blockKey && (await env.SCHEDULE_MEETING_BLOCKS.get(blockKey)) !== null) {
         console.log(`schedule-meeting: blocked ${blockKey}`);
         return tooManyRequestsResponse(cors);
+      }
+    }
+
+    // Same idea, but for the chat warm-up ping: once a caller has woken the
+    // Lambda up within the last 2h, every further call is answered here —
+    // "redirected" — instead of invoking it again.
+    let wakeUpBlockKey = null;
+    if (isWakeUp) {
+      wakeUpBlockKey = await buildWakeUpBlockKey(ip, request.headers.get("User-Agent"));
+      if (wakeUpBlockKey && (await env.WAKE_UP_BLOCKS.get(wakeUpBlockKey)) !== null) {
+        console.log(`wake-up: redirected ${wakeUpBlockKey}`);
+        return redirectedResponse(cors);
       }
     }
 
@@ -207,9 +252,10 @@ export default {
     applySecurityHeaders(headers);
 
     // The chat endpoint streams SSE (`response.body` piped through untouched);
-    // schedule-meeting returns a single small JSON object, so it's safe (and
-    // necessary, to inspect `status`) to buffer it here.
-    if (!isScheduleMeeting) {
+    // schedule-meeting and wake-up both return a single small JSON object, so
+    // it's safe (and, for schedule-meeting, necessary to inspect `status`) to
+    // buffer those here.
+    if (!isScheduleMeeting && !isWakeUp) {
       return new Response(response.body, { status: response.status, headers });
     }
 
@@ -230,6 +276,13 @@ export default {
         // disable the cooldown, so it needs to be visible in `wrangler tail`.
         console.error(`schedule-meeting: failed to parse Lambda response for cooldown check: ${err.message}`);
       }
+    }
+
+    if (wakeUpBlockKey && response.ok) {
+      await env.WAKE_UP_BLOCKS.put(wakeUpBlockKey, "1", {
+        expirationTtl: WAKE_UP_BLOCK_TTL_SECONDS,
+      });
+      console.log(`wake-up: throttle set for ${wakeUpBlockKey}`);
     }
 
     return new Response(bodyText, { status: response.status, headers });

@@ -14,3 +14,11 @@ custom_domain = true
 [[kv_namespaces]]
 binding = "SCHEDULE_MEETING_BLOCKS"
 id = "2dd48638f0f14f4cbb5d1759f62862da"
+
+# Stores 2h chat warm-up throttle markers, keyed by a hash of (IP, User-Agent).
+# See buildWakeUpBlockKey() in src/index.js. Create with:
+#   npx wrangler kv namespace create WAKE_UP_BLOCKS
+# then replace the placeholder id below with the one it prints.
+[[kv_namespaces]]
+binding = "WAKE_UP_BLOCKS"
+id = "ef478340bacc4c8d9d5db35d3cb5908a"

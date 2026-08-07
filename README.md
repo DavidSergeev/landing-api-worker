@@ -20,8 +20,8 @@ landing-api-worker/
 
 ## How it works
 
-- `POST /` and `POST /schedule-meeting` are the only routes proxied,
-  matching the endpoints in `landing-page-backend/src/main.py`.
+- `POST /`, `POST /schedule-meeting`, and `POST /wake-up` are the only routes
+  proxied, matching the endpoints in `landing-page-backend/src/main.py`.
 - Every proxied request is signed with `@aws-sdk/signature-v4` +
   `@aws-crypto/sha256-js` (pure-JS SHA-256, no Node crypto needed — works on
   Workers' V8 isolate runtime) before being forwarded to `LAMBDA_URL`. The
@@ -48,6 +48,14 @@ landing-api-worker/
   failed"). KV's TTL handles expiry automatically, no cleanup job needed.
   This is separate from — and in addition to — the dashboard Rate Limiting
   Rule already limiting burst frequency (4/5 requests per 10s per caller).
+- `POST /wake-up` is hit by the frontend when the user opens the chat, so the
+  Lambda cold-starts before they finish typing their first message. It's
+  throttled the same way as `/schedule-meeting` (KV, hashed IP + User-Agent
+  key) but with its own `WAKE_UP_BLOCKS` namespace and a 2h `expirationTtl`:
+  the first call in a 2h window is proxied to the Lambda as usual (response
+  `{"message": "warm up started"}`); every other call in that window is
+  answered directly by the worker with `{"message": "redirected"}` and never
+  reaches the Lambda.
 
 ## Setup
 
@@ -69,6 +77,15 @@ Non-secret config lives in `wrangler.toml`:
   ```
 
   (the resulting `id` is already wired into `wrangler.toml`).
+
+- `WAKE_UP_BLOCKS` — KV namespace backing the 2h `/wake-up` throttle, created via:
+
+  ```bash
+  npx wrangler kv namespace create WAKE_UP_BLOCKS
+  ```
+
+  then replace the placeholder `id` under `WAKE_UP_BLOCKS` in `wrangler.toml`
+  with the one it prints.
 
 Secrets (already created per the task, set via the Cloudflare dashboard or
 `wrangler secret put`, never committed):
