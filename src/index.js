@@ -15,7 +15,7 @@ const SCHEDULE_MEETING_FAILURE_STATUS = "the meeting is not scheduled";
 // answered here as a no-op "redirected" so the Lambda isn't woken up (and
 // billed) once per click.
 const WAKE_UP_PATH = "/wake-up";
-const WAKE_UP_BLOCK_TTL_SECONDS = 2 * 60 * 60;
+const WAKE_UP_BLOCK_TTL_SECONDS = 4 * 60;
 
 // Fixed-window per-caller cap on the chat endpoint itself: the first chat
 // call opens a 1h window, up to CHAT_RATE_LIMIT_MAX_CALLS calls are allowed
