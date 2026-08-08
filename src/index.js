@@ -221,13 +221,19 @@ async function signRequest(env, url, body, ip) {
       // real caller IP. Lets the backend enforce its own per-user rate limits
       // (e.g. the agent's schedule_meeting tool call), which it otherwise has
       // no visibility into since it only ever sees this Worker as the caller.
-      "x-real-ip": ip || "",
+      //
+      // NOT named "x-real-ip": Cloudflare's outbound fetch() silently strips
+      // that specific header name at the edge (it treats it like
+      // X-Forwarded-For and folds it into its own client-IP handling instead
+      // of forwarding it), so the byte-for-byte-correct signature that
+      // includes it in SignedHeaders would never match what Lambda actually
+      // receives — every request would 403 with InvalidSignatureException.
+      "x-client-ip": ip || "",
     },
 
     body,
   });
 }
-
 
 export default {
 
@@ -317,7 +323,6 @@ export default {
       body,
       ip
     );
-
 
     const response = await fetch(
       targetUrl,

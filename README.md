@@ -25,10 +25,16 @@ landing-api-worker/
 - Every proxied request is signed with `@aws-sdk/signature-v4` +
   `@aws-crypto/sha256-js` (pure-JS SHA-256, no Node crypto needed — works on
   Workers' V8 isolate runtime) before being forwarded to `LAMBDA_URL`. The
-  signed headers also include `x-real-ip` (from `CF-Connecting-IP`) — since
+  signed headers also include `x-client-ip` (from `CF-Connecting-IP`) — since
   it's part of the SigV4 signature, only this Worker can set it truthfully,
   so the Lambda can trust it as the real caller IP for its own per-user rate
   limiting (it otherwise has no visibility into the original client at all).
+  Deliberately not named `x-real-ip`: Cloudflare's outbound `fetch()` silently
+  strips that specific header name at the edge (treating it like
+  `X-Forwarded-For` and folding it into its own client-IP handling instead of
+  forwarding it), so the signature — which lists it in `SignedHeaders` —
+  would never match what Lambda actually receives, and every request would
+  403 with `InvalidSignatureException`.
 - The chat endpoint's streamed SSE response (`AWS_LWA_INVOKE_MODE=response_stream`)
   is passed straight through — `upstreamResponse.body` is forwarded byte-for-byte,
   it is never buffered here.
